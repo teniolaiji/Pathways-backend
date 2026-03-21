@@ -1,24 +1,63 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-// Pass apiVersion: "v1" explicitly — the default "v1beta" causes 404
-// for certain model names on some API key regions
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY, {
   apiVersion: "v1",
 });
 
 /**
- * Builds a detailed prompt from the user's assessment data
- * and sends it to the Google Gemini API (free tier) to generate
- * a personalised, subfield-specific STEAM learning pathway.
+ * Pauses execution for a given number of milliseconds.
+ * Used between retry attempts when rate limited.
+ */
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Calls the Gemini API with automatic retry on rate limit (429) errors.
+ * Will attempt up to 3 times with increasing wait times between attempts.
  *
- * Free tier limits:
- *   - 10 requests per minute
- *   - 250 requests per day
- *   - No credit card required
- * Get your free API key at: https://aistudio.google.com
+ * @param {Object} model      - The Gemini model instance
+ * @param {String} prompt     - The prompt to send
+ * @param {Number} attempt    - Current attempt number (starts at 1)
+ * @returns {Object}          - The Gemini result object
+ */
+const callWithRetry = async (model, prompt, attempt = 1) => {
+  const MAX_ATTEMPTS = 3;
+
+  try {
+    return await model.generateContent(prompt);
+  } catch (error) {
+    const isRateLimit =
+      error.message?.includes("429") ||
+      error.message?.includes("Too Many Requests") ||
+      error.message?.includes("quota");
+
+    if (isRateLimit && attempt < MAX_ATTEMPTS) {
+      // Wait longer on each retry: 5s, then 15s
+      const waitTime = attempt === 1 ? 5000 : 15000;
+      console.log(
+        `[Gemini] Rate limited. Attempt ${attempt}/${MAX_ATTEMPTS}. Retrying in ${waitTime / 1000}s...`
+      );
+      await sleep(waitTime);
+      return callWithRetry(model, prompt, attempt + 1);
+    }
+
+    // If still failing after max attempts, throw a clean user-facing error
+    if (isRateLimit) {
+      throw new Error(
+        "The AI service is currently busy. Please wait 1 minute and try again."
+      );
+    }
+
+    throw error;
+  }
+};
+
+/**
+ * Generates a personalised STEAM learning pathway using Gemini AI.
+ * Builds a structured prompt from the user's assessment and returns
+ * a parsed JSON pathway object.
  *
  * @param {Object} assessmentData - The saved assessment document
- * @returns {Object} - Parsed pathway JSON from Gemini
+ * @returns {Object}              - Parsed pathway JSON from Gemini
  */
 const generateLearningPathway = async (assessmentData) => {
   const { skillLevel, domain, subfield, goals, constraints } = assessmentData;
@@ -92,7 +131,7 @@ RESPOND WITH VALID JSON ONLY. No markdown, no extra text, no code fences. Exact 
     },
   });
 
-  const result = await model.generateContent(prompt);
+  const result = await callWithRetry(model, prompt);
   const rawText = result.response.text().trim();
 
   // Strip any accidental markdown fences Gemini might add
