@@ -1,8 +1,21 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// Pass apiVersion: "v1" explicitly — the default "v1beta" causes 404
+// for certain model names on some API key regions
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY, {
+  apiVersion: "v1",
+});
 
-/*
+/**
+ * Builds a detailed prompt from the user's assessment data
+ * and sends it to the Google Gemini API (free tier) to generate
+ * a personalised, subfield-specific STEAM learning pathway.
+ *
+ * Free tier limits:
+ *   - 10 requests per minute
+ *   - 250 requests per day
+ *   - No credit card required
+ * Get your free API key at: https://aistudio.google.com
  *
  * @param {Object} assessmentData - The saved assessment document
  * @returns {Object} - Parsed pathway JSON from Gemini
@@ -10,7 +23,7 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const generateLearningPathway = async (assessmentData) => {
   const { skillLevel, domain, subfield, goals, constraints } = assessmentData;
 
-  // Format subfield label for the prompt (e.g. "data_science" → "Data Science")
+  // Format labels for the prompt e.g. "data_science" → "Data Science"
   const subfieldLabel = subfield
     .split("_")
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
@@ -82,6 +95,7 @@ RESPOND WITH VALID JSON ONLY. No markdown, no extra text, no code fences. Exact 
   const result = await model.generateContent(prompt);
   const rawText = result.response.text().trim();
 
+  // Strip any accidental markdown fences Gemini might add
   const cleaned = rawText
     .replace(/^```json\s*/i, "")
     .replace(/^```\s*/i, "")

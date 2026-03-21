@@ -8,8 +8,10 @@ const protect = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
-
+// Public — frontend calls this to populate domain/subfield dropdowns
 router.get("/subfields", getSubfields);
+
+// Protected — requires JWT
 router.post("/", protect, submitAssessment);
 router.get("/", protect, getUserAssessments);
 
