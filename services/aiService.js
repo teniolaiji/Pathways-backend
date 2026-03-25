@@ -1,68 +1,100 @@
-const { GoogleGenerativeAI } = require("@google/generative-ai");
-
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY, {
-  apiVersion: "v1",
-});
-
 /**
- * Pauses execution for a given number of milliseconds.
- * Used between retry attempts when rate limited.
+ * aiService.js
+ *
+ * Uses the Groq API to generate personalised STEAM learning pathways.
+ * Groq is free for development with no daily request limits.
+ * Model: llama-3.1-8b-instant (fast, capable, free tier)
+ *
+ * Get your free API key at: https://console.groq.com
+ * Add to .env: GROQ_API_KEY=gsk_your_key_here
  */
+
+const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
+const GROQ_MODEL = "llama-3.1-8b-instant";
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Calls the Gemini API with automatic retry on rate limit (429) errors.
- * Will attempt up to 3 times with increasing wait times between attempts.
+ * Calls the Groq API with automatic retry on rate limit (429) errors.
  *
- * @param {Object} model      - The Gemini model instance
- * @param {String} prompt     - The prompt to send
- * @param {Number} attempt    - Current attempt number (starts at 1)
- * @returns {Object}          - The Gemini result object
+ * @param {String} prompt   - The user prompt to send
+ * @param {Number} attempt  - Current attempt number (starts at 1)
+ * @returns {String}        - Raw text response from the model
  */
-const callWithRetry = async (model, prompt, attempt = 1) => {
+const callGroq = async (prompt, attempt = 1) => {
   const MAX_ATTEMPTS = 3;
+  const apiKey = process.env.GROQ_API_KEY;
 
-  try {
-    return await model.generateContent(prompt);
-  } catch (error) {
-    const isRateLimit =
-      error.message?.includes("429") ||
-      error.message?.includes("Too Many Requests") ||
-      error.message?.includes("quota");
-
-    if (isRateLimit && attempt < MAX_ATTEMPTS) {
-      // Wait longer on each retry: 5s, then 15s
-      const waitTime = attempt === 1 ? 5000 : 15000;
-      console.log(
-        `[Gemini] Rate limited. Attempt ${attempt}/${MAX_ATTEMPTS}. Retrying in ${waitTime / 1000}s...`
-      );
-      await sleep(waitTime);
-      return callWithRetry(model, prompt, attempt + 1);
-    }
-
-    // If still failing after max attempts, throw a clean user-facing error
-    if (isRateLimit) {
-      throw new Error(
-        "The AI service is currently busy. Please wait 1 minute and try again."
-      );
-    }
-
-    throw error;
+  if (!apiKey) {
+    throw new Error("GROQ_API_KEY is missing from your .env file.");
   }
+
+  const response = await fetch(GROQ_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: GROQ_MODEL,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are an expert STEAM education advisor. Always respond with valid JSON only. No markdown, no code fences, no extra text.",
+        },
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+      temperature: 0.7,
+      max_tokens: 3000,
+    }),
+  });
+
+  // Handle rate limiting with automatic retry
+  if (response.status === 429 && attempt < MAX_ATTEMPTS) {
+    const wait = attempt === 1 ? 5000 : 15000;
+    console.log(
+      `[Groq] Rate limited. Attempt ${attempt}/${MAX_ATTEMPTS}. Retrying in ${wait / 1000}s...`
+    );
+    await sleep(wait);
+    return callGroq(prompt, attempt + 1);
+  }
+
+  if (response.status === 429) {
+    throw new Error(
+      "The AI service is currently busy. Please wait 1 minute and try again."
+    );
+  }
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    console.error("[Groq] API error:", response.status, errorBody);
+    throw new Error(`AI service error: ${response.status} ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  const text = data?.choices?.[0]?.message?.content;
+
+  if (!text) {
+    throw new Error("AI service returned an empty response.");
+  }
+
+  return text.trim();
 };
 
 /**
- * Generates a personalised STEAM learning pathway using Gemini AI.
- * Builds a structured prompt from the user's assessment and returns
- * a parsed JSON pathway object.
+ * Generates a personalised STEAM learning pathway using Groq AI.
  *
- * @param {Object} assessmentData - The saved assessment document
- * @returns {Object}              - Parsed pathway JSON from Gemini
+ * @param {Object} assessmentData - The saved assessment document from MongoDB
+ * @returns {Object}              - Parsed pathway JSON object
  */
 const generateLearningPathway = async (assessmentData) => {
   const { skillLevel, domain, subfield, goals, constraints } = assessmentData;
 
-  // Format labels for the prompt e.g. "data_science" → "Data Science"
+  // Format labels e.g. "data_science" → "Data Science"
   const subfieldLabel = subfield
     .split("_")
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
@@ -70,9 +102,7 @@ const generateLearningPathway = async (assessmentData) => {
 
   const domainLabel = domain.charAt(0).toUpperCase() + domain.slice(1);
 
-  const prompt = `
-You are an expert STEAM education advisor specialising in ${subfieldLabel} within ${domainLabel}.
-You are helping an African woman build a personalised, practical learning pathway.
+  const prompt = `You are an expert STEAM education advisor specialising in ${subfieldLabel} within ${domainLabel}. You are helping an African woman build a personalised, practical learning pathway.
 
 LEARNER PROFILE:
 - Domain: ${domainLabel}
@@ -86,24 +116,20 @@ LEARNER PROFILE:
 
 YOUR TASK:
 Generate a focused, practical learning pathway specifically for ${subfieldLabel}.
-- Create 4 to 6 modules that are directly relevant to ${subfieldLabel} (NOT generic STEAM topics).
-- Each module must build on the previous one (progressive difficulty).
-- Calibrate depth and pace to someone with ${skillLevel} level in ${subfieldLabel}.
-- Keep estimated hours realistic for someone with ${constraints?.timeAvailability || "2_to_5hrs"} per week.
-- For each module, include 2 to 3 real, free or low-cost resources from platforms like:
-  freeCodeCamp, Coursera (free audit), edX (free audit), Khan Academy, YouTube, MIT OpenCourseWare,
-  fast.ai, Google Colab, W3Schools, Codecademy (free tier), or similar.
-- Prefer resources that are accessible with ${constraints?.internetAccess || "moderate"} internet.
-- Write an overall explanation of why this pathway structure suits this specific learner.
+- Create 4 to 6 modules directly relevant to ${subfieldLabel}.
+- Each module must build on the previous one in difficulty.
+- Calibrate depth to someone with ${skillLevel} level knowledge.
+- For each module include 2 to 3 free resources from freeCodeCamp, Coursera (free audit), edX (free audit), Khan Academy, YouTube, MIT OpenCourseWare, fast.ai, or W3Schools.
+- Write a brief overall explanation of why this pathway suits this learner.
 
-RESPOND WITH VALID JSON ONLY. No markdown, no extra text, no code fences. Exact structure:
+RESPOND WITH VALID JSON ONLY. No markdown, no code fences, no text before or after the JSON:
 {
   "title": "Descriptive pathway title mentioning ${subfieldLabel}",
   "summary": "2-3 sentence summary of what the learner will achieve",
   "aiExplanation": "Why this pathway is structured this way for this specific learner",
   "modules": [
     {
-      "title": "Specific module title",
+      "title": "Module title",
       "description": "What the learner will learn and be able to do after this module",
       "difficulty": "beginner",
       "estimatedHours": 3,
@@ -112,7 +138,7 @@ RESPOND WITH VALID JSON ONLY. No markdown, no extra text, no code fences. Exact 
       "resources": [
         {
           "title": "Resource name",
-          "url": "https://actual-working-url.com",
+          "url": "https://working-url.com",
           "format": "video",
           "source": "Platform name",
           "isFree": true
@@ -120,21 +146,11 @@ RESPOND WITH VALID JSON ONLY. No markdown, no extra text, no code fences. Exact 
       ]
     }
   ]
-}
-`;
+}`;
 
-  const model = genAI.getGenerativeModel({
-    model: "gemini-2.0-flash",
-    generationConfig: {
-      temperature: 0.7,
-      maxOutputTokens: 3000,
-    },
-  });
+  const rawText = await callGroq(prompt);
 
-  const result = await callWithRetry(model, prompt);
-  const rawText = result.response.text().trim();
-
-  // Strip any accidental markdown fences Gemini might add
+  // Strip any accidental markdown fences
   const cleaned = rawText
     .replace(/^```json\s*/i, "")
     .replace(/^```\s*/i, "")
@@ -142,7 +158,37 @@ RESPOND WITH VALID JSON ONLY. No markdown, no extra text, no code fences. Exact 
     .trim();
 
   const parsed = JSON.parse(cleaned);
+
+  // Sanitise resource formats — AI sometimes returns values not in our schema
+  const validFormats = ["video", "article", "exercise", "course"];
+  const formatMap = {
+    web: "article",
+    website: "article",
+    tutorial: "article",
+    blog: "article",
+    book: "article",
+    podcast: "video",
+    interactive: "exercise",
+    project: "exercise",
+    quiz: "exercise",
+    mooc: "course",
+    certification: "course",
+  };
+
+  if (parsed.modules) {
+    parsed.modules = parsed.modules.map((mod) => ({
+      ...mod,
+      resources: (mod.resources || []).map((resource) => ({
+        ...resource,
+        format: validFormats.includes(resource.format)
+          ? resource.format
+          : formatMap[resource.format?.toLowerCase()] || "article",
+      })),
+    }));
+  }
+
   return parsed;
 };
+
 
 module.exports = { generateLearningPathway };
