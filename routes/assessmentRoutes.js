@@ -6,7 +6,8 @@ const {
 } = require("../controllers/assessmentController");
 const protect = require("../middleware/authMiddleware");
 
-const router = express.Router();
+const { protect } = require("../middleware/authMiddleware");
+
 
 // Public — frontend calls this to populate domain/subfield dropdowns
 router.get("/subfields", getSubfields);

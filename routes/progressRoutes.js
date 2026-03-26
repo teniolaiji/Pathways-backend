@@ -6,7 +6,8 @@ const {
   flagResource,
   triggerResourceValidation,
 } = require("../controllers/progressController");
-const protect = require("../middleware/authMiddleware");
+
+const { protect } = require("../middleware/authMiddleware");
 
 const router = express.Router();
 

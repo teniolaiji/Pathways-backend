@@ -4,7 +4,7 @@ const {
   getUserPathways,
   getPathwayById,
 } = require("../controllers/pathwaysController");
-const protect = require("../middleware/authMiddleware");
+const { protect } = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
