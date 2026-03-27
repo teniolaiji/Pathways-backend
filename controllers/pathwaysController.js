@@ -221,6 +221,11 @@ const getPathwayFeedbackAnalytics = async (req, res) => {
     progress.feedbackLog.forEach((entry) => {
       const key = entry.moduleId?.toString();
       if (!key || !moduleMap[key]) return;
+
+      // Only count entries that have actual feedback values
+      const hasFeedback = entry.feedback?.difficulty || entry.feedback?.relevance;
+      if (!hasFeedback) return;
+
       moduleMap[key].totalFeedback++;
 
       if (entry.feedback?.difficulty) {
