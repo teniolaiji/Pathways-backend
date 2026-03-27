@@ -53,6 +53,19 @@ app.get("/api/protected", protect, (req, res) => {
 app.use(errorHandler);
 
 const PORT = process.env.PORT || 8000;
+// Keep Render free tier awake by pinging itself every 14 minutes
+if (process.env.NODE_ENV === "production") {
+  const BACKEND_URL = process.env.RENDER_EXTERNAL_URL || 
+                      "https://pathways-backend-3151.onrender.com";
+  setInterval(async () => {
+    try {
+      await fetch(`${BACKEND_URL}/`);
+      console.log("[Keep-alive] Ping sent");
+    } catch (e) {
+      console.log("[Keep-alive] Ping failed:", e.message);
+    }
+  }, 14 * 60 * 1000); // every 14 minutes
+}
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
 module.exports = app;
