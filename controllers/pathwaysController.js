@@ -28,8 +28,31 @@ const generatePathway = async (req, res) => {
     });
     if (!assessment) return res.status(404).json({ message: "Assessment not found." });
 
-    const aiResult         = await generateLearningPathway(assessment);
-    const validatedModules = await validateModuleResources(aiResult.modules);
+  const aiResult = await generateLearningPathway(assessment);
+
+// Sanitise difficulty values — AI sometimes returns non-schema values
+const validDifficulties = ["beginner", "intermediate", "advanced"];
+aiResult.modules = aiResult.modules.map((mod) => ({
+  ...mod,
+  difficulty: validDifficulties.includes(mod.difficulty)
+    ? mod.difficulty
+    : mod.difficulty?.toLowerCase().includes("advanced")
+    ? "advanced"
+    : mod.difficulty?.toLowerCase().includes("intermediate")
+    ? "intermediate"
+    : "beginner",
+  resources: (mod.resources || []).map((r) => ({
+    ...r,
+    format: ["video","article","exercise","course"].includes(r.format)
+      ? r.format
+      : { web:"article", website:"article", tutorial:"article",
+          blog:"article", book:"article", podcast:"video",
+          interactive:"exercise", project:"exercise",
+          mooc:"course", certification:"course" }[r.format?.toLowerCase()] || "article",
+  })),
+}));
+
+const validatedModules = await validateModuleResources(aiResult.modules);
 
     const pathway = await LearningPathway.create({
       user:          req.user.id,
