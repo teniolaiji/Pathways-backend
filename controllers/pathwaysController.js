@@ -30,29 +30,49 @@ const generatePathway = async (req, res) => {
 
   const aiResult = await generateLearningPathway(assessment);
 
-// Sanitise difficulty values — AI sometimes returns non-schema values
-const validDifficulties = ["beginner", "intermediate", "advanced"];
-aiResult.modules = aiResult.modules.map((mod) => ({
-  ...mod,
-  difficulty: validDifficulties.includes(mod.difficulty)
-    ? mod.difficulty
-    : mod.difficulty?.toLowerCase().includes("advanced")
-    ? "advanced"
-    : mod.difficulty?.toLowerCase().includes("intermediate")
-    ? "intermediate"
-    : "beginner",
-  resources: (mod.resources || []).map((r) => ({
-    ...r,
-    format: ["video","article","exercise","course"].includes(r.format)
-      ? r.format
-      : { web:"article", website:"article", tutorial:"article",
-          blog:"article", book:"article", podcast:"video",
-          interactive:"exercise", project:"exercise",
-          mooc:"course", certification:"course" }[r.format?.toLowerCase()] || "article",
-  })),
-}));
+// ── Sanitise AI response before saving ──────────────────────
+    const validDifficulties = ["beginner", "intermediate", "advanced"];
+    const validFormats      = ["video", "article", "exercise", "course"];
 
-const validatedModules = await validateModuleResources(aiResult.modules);
+    const sanitiseDifficulty = (val) => {
+      if (!val) return "beginner";
+      const v = val.toLowerCase();
+      if (validDifficulties.includes(v)) return v;
+      if (v.includes("advanced"))        return "advanced";
+      if (v.includes("intermediate"))    return "intermediate";
+      if (v.includes("hard"))            return "advanced";
+      if (v.includes("medium"))          return "intermediate";
+      if (v.includes("moderate"))        return "intermediate";
+      if (v.includes("easy"))            return "beginner";
+      return "beginner";
+    };
+
+    const sanitiseFormat = (val) => {
+      if (!val) return "article";
+      const v = val.toLowerCase();
+      if (validFormats.includes(v)) return v;
+      const map = {
+        web:"article", website:"article", tutorial:"article",
+        blog:"article", book:"article", reading:"article", text:"article",
+        podcast:"video", lecture:"video", talk:"video", webinar:"video",
+        interactive:"exercise", project:"exercise", quiz:"exercise",
+        practice:"exercise", assignment:"exercise", lab:"exercise",
+        mooc:"course", certification:"course", program:"course",
+      };
+      return map[v] || "article";
+    };
+
+    aiResult.modules = aiResult.modules.map((mod) => ({
+      ...mod,
+      difficulty: sanitiseDifficulty(mod.difficulty),
+      resources: (mod.resources || []).map((r) => ({
+        ...r,
+        format: sanitiseFormat(r.format),
+      })),
+    }));
+    // ── End sanitisation ─────────────────────────────────────────
+
+    const validatedModules = await validateModuleResources(aiResult.modules);
 
     const pathway = await LearningPathway.create({
       user:          req.user.id,
