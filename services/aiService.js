@@ -148,6 +148,49 @@ RESPOND WITH VALID JSON ONLY. No markdown, no code fences, no text before or aft
   ]
 }`;
 
+/**
+ * Takes a list of broken resources and asks Groq to replace them
+ * with working alternatives from the same platforms.
+ */
+const replacebrokenResources = async (brokenResources, subfieldLabel, domainLabel) => {
+  if (!brokenResources.length) return [];
+
+  const prompt = `You are a STEAM education resource curator.
+
+The following learning resources for ${subfieldLabel} (${domainLabel}) have broken or inaccessible URLs.
+Please provide working replacement resources for each one.
+
+BROKEN RESOURCES TO REPLACE:
+${brokenResources.map((r, i) => `${i + 1}. "${r.title}" — broken URL: ${r.url}`).join("\n")}
+
+REQUIREMENTS:
+- Provide exactly ${brokenResources.length} replacement(s), one for each broken resource above
+- Use only well-known platforms: freeCodeCamp, Coursera, edX, Khan Academy, YouTube, MDN, W3Schools, fast.ai, MIT OpenCourseWare, Codecademy
+- Every URL must be a real, publicly accessible page that does not require login to view
+- Keep the same topic/subject as the broken resource it is replacing
+- Prefer URLs to specific pages rather than homepages e.g. https://www.freecodecamp.org/learn/responsive-web-design/ not https://www.freecodecamp.org
+
+RESPOND WITH VALID JSON ONLY, no markdown, no extra text:
+[
+  {
+    "title": "Resource title",
+    "url": "https://working-url.com/specific-page",
+    "format": "video",
+    "source": "Platform name",
+    "isFree": true
+  }
+]`;
+
+  const rawText = await callGroq(prompt);
+  const cleaned = rawText
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
+
+  return JSON.parse(cleaned);
+};
+
   const rawText = await callGroq(prompt);
 
   // Strip any accidental markdown fences
@@ -191,4 +234,4 @@ RESPOND WITH VALID JSON ONLY. No markdown, no code fences, no text before or aft
 };
 
 
-module.exports = { generateLearningPathway };
+module.exports = { generateLearningPathway, replacebrokenResources };

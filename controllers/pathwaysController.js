@@ -1,12 +1,17 @@
 const Assessment    = require("../models/Assessment");
 const LearningPathway = require("../models/LearningPathway");
 const Progress      = require("../models/Progress");
-const { generateLearningPathway } = require("../services/aiService");
+const { generateLearningPathway, replacebrokenResources } = require("../services/aiService");
 const { validateResourceUrl }     = require("../services/personalizationEngine");
 
 // Validates all resources concurrently before saving
-const validateModuleResources = async (modules) => {
-  return Promise.all(
+/**
+ * Validates all resource URLs. For any that fail, asks the AI
+ * to suggest working replacements. Retries each replacement once.
+ */
+const validateAndFixResources = async (modules, subfieldLabel, domainLabel) => {
+  // Step 1 — validate all URLs concurrently
+  const withValidation = await Promise.all(
     modules.map(async (mod) => ({
       ...mod,
       resources: await Promise.all(
@@ -17,6 +22,59 @@ const validateModuleResources = async (modules) => {
       ),
     }))
   );
+
+  // Step 2 — collect all broken resources
+  const broken = [];
+  withValidation.forEach((mod) => {
+    mod.resources.forEach((r) => {
+      if (!r.isValidated) {
+        broken.push({ ...r, _modId: mod._id || mod.title });
+      }
+    });
+  });
+
+  console.log(`[Pathway] ${withValidation.flatMap(m => m.resources).filter(r => r.isValidated).length} valid, ${broken.length} broken resources.`);
+
+  // Step 3 — if there are broken resources, ask AI for replacements
+  if (broken.length === 0) return withValidation;
+
+  let replacements = [];
+  try {
+    console.log(`[Pathway] Requesting ${broken.length} replacement(s) from AI...`);
+    replacements = await replacebrokenResources(broken, subfieldLabel, domainLabel);
+    console.log(`[Pathway] Got ${replacements.length} replacement(s).`);
+  } catch (e) {
+    console.error("[Pathway] AI replacement failed:", e.message);
+    // If replacement fails, keep broken resources but marked as unvalidated
+    return withValidation;
+  }
+
+  // Step 4 — validate the replacement URLs
+  const validatedReplacements = await Promise.all(
+    replacements.map(async (r) => ({
+      ...r,
+      isValidated: await validateResourceUrl(r.url),
+    }))
+  );
+
+  // Step 5 — swap broken resources with replacements
+  let replacementIndex = 0;
+  const fixed = withValidation.map((mod) => ({
+    ...mod,
+    resources: mod.resources.map((r) => {
+      if (r.isValidated) return r; // keep working resources as-is
+      // Replace with next available replacement
+      const replacement = validatedReplacements[replacementIndex];
+      replacementIndex++;
+      if (replacement) {
+        console.log(`[Pathway] Replaced "${r.title}" with "${replacement.title}"`);
+        return replacement;
+      }
+      return r; // fallback: keep original if no replacement available
+    }),
+  }));
+
+  return fixed;
 };
 
 // POST /api/pathway/generate/:assessmentId
@@ -72,7 +130,9 @@ const generatePathway = async (req, res) => {
     }));
     // ── End sanitisation ─────────────────────────────────────────
 
-    const validatedModules = await validateModuleResources(aiResult.modules);
+    const subfieldLabel = assessment.subfield?.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") || "";
+    const domainLabel   = assessment.domain?.charAt(0).toUpperCase() + assessment.domain?.slice(1) || "";
+    const validatedModules = await validateAndFixResources(aiResult.modules, subfieldLabel, domainLabel);
 
     const pathway = await LearningPathway.create({
       user:          req.user.id,
@@ -111,7 +171,9 @@ const regeneratePathway = async (req, res) => {
     await oldPathway.save();
 
     const aiResult         = await generateLearningPathway(assessment);
-    const validatedModules = await validateModuleResources(aiResult.modules);
+    const subfieldLabel = assessment.subfield?.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") || "";
+    const domainLabel   = assessment.domain?.charAt(0).toUpperCase() + assessment.domain?.slice(1) || "";
+    const validatedModules = await validateAndFixResources(aiResult.modules, subfieldLabel, domainLabel);
 
     const newPathway = await LearningPathway.create({
       user:          req.user.id,
