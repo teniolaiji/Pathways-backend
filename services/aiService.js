@@ -1,26 +1,16 @@
 /**
  * aiService.js
- *
  * Uses the Groq API to generate personalised STEAM learning pathways.
- * Groq is free for development with no daily request limits.
  * Model: llama-3.1-8b-instant (fast, capable, free tier)
- *
  * Get your free API key at: https://console.groq.com
- * Add to .env: GROQ_API_KEY=gsk_your_key_here
  */
 
-const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
+const GROQ_URL   = "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_MODEL = "llama-3.1-8b-instant";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/**
- * Calls the Groq API with automatic retry on rate limit (429) errors.
- *
- * @param {String} prompt   - The user prompt to send
- * @param {Number} attempt  - Current attempt number (starts at 1)
- * @returns {String}        - Raw text response from the model
- */
+// ── callGroq — top level so all functions can use it ─────────────
 const callGroq = async (prompt, attempt = 1) => {
   const MAX_ATTEMPTS = 3;
   const apiKey = process.env.GROQ_API_KEY;
@@ -53,20 +43,15 @@ const callGroq = async (prompt, attempt = 1) => {
     }),
   });
 
-  // Handle rate limiting with automatic retry
   if (response.status === 429 && attempt < MAX_ATTEMPTS) {
     const wait = attempt === 1 ? 5000 : 15000;
-    console.log(
-      `[Groq] Rate limited. Attempt ${attempt}/${MAX_ATTEMPTS}. Retrying in ${wait / 1000}s...`
-    );
+    console.log(`[Groq] Rate limited. Attempt ${attempt}/${MAX_ATTEMPTS}. Retrying in ${wait / 1000}s...`);
     await sleep(wait);
     return callGroq(prompt, attempt + 1);
   }
 
   if (response.status === 429) {
-    throw new Error(
-      "The AI service is currently busy. Please wait 1 minute and try again."
-    );
+    throw new Error("The AI service is currently busy. Please wait 1 minute and try again.");
   }
 
   if (!response.ok) {
@@ -85,16 +70,10 @@ const callGroq = async (prompt, attempt = 1) => {
   return text.trim();
 };
 
-/**
- * Generates a personalised STEAM learning pathway using Groq AI.
- *
- * @param {Object} assessmentData - The saved assessment document from MongoDB
- * @returns {Object}              - Parsed pathway JSON object
- */
+// ── generateLearningPathway ───────────────────────────────────────
 const generateLearningPathway = async (assessmentData) => {
   const { skillLevel, domain, subfield, goals, constraints } = assessmentData;
 
-  // Format labels e.g. "data_science" → "Data Science"
   const subfieldLabel = subfield
     .split("_")
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
@@ -148,10 +127,41 @@ RESPOND WITH VALID JSON ONLY. No markdown, no code fences, no text before or aft
   ]
 }`;
 
-/**
- * Takes a list of broken resources and asks Groq to replace them
- * with working alternatives from the same platforms.
- */
+  const rawText = await callGroq(prompt);
+
+  const cleaned = rawText
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
+
+  const parsed = JSON.parse(cleaned);
+
+  // Sanitise resource formats
+  const validFormats = ["video", "article", "exercise", "course"];
+  const formatMap = {
+    web: "article", website: "article", tutorial: "article",
+    blog: "article", book: "article", podcast: "video",
+    interactive: "exercise", project: "exercise", quiz: "exercise",
+    mooc: "course", certification: "course",
+  };
+
+  if (parsed.modules) {
+    parsed.modules = parsed.modules.map((mod) => ({
+      ...mod,
+      resources: (mod.resources || []).map((resource) => ({
+        ...resource,
+        format: validFormats.includes(resource.format)
+          ? resource.format
+          : formatMap[resource.format?.toLowerCase()] || "article",
+      })),
+    }));
+  }
+
+  return parsed;
+};
+
+// ── replacebrokenResources ────────────────────────────────────────
 const replacebrokenResources = async (brokenResources, subfieldLabel, domainLabel) => {
   if (!brokenResources.length) return [];
 
@@ -168,7 +178,7 @@ REQUIREMENTS:
 - Use only well-known platforms: freeCodeCamp, Coursera, edX, Khan Academy, YouTube, MDN, W3Schools, fast.ai, MIT OpenCourseWare, Codecademy
 - Every URL must be a real, publicly accessible page that does not require login to view
 - Keep the same topic/subject as the broken resource it is replacing
-- Prefer URLs to specific pages rather than homepages e.g. https://www.freecodecamp.org/learn/responsive-web-design/ not https://www.freecodecamp.org
+- Prefer URLs to specific pages e.g. https://www.freecodecamp.org/learn/responsive-web-design/ not https://www.freecodecamp.org
 
 RESPOND WITH VALID JSON ONLY, no markdown, no extra text:
 [
@@ -190,48 +200,5 @@ RESPOND WITH VALID JSON ONLY, no markdown, no extra text:
 
   return JSON.parse(cleaned);
 };
-
-  const rawText = await callGroq(prompt);
-
-  // Strip any accidental markdown fences
-  const cleaned = rawText
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/```\s*$/i, "")
-    .trim();
-
-  const parsed = JSON.parse(cleaned);
-
-  // Sanitise resource formats — AI sometimes returns values not in our schema
-  const validFormats = ["video", "article", "exercise", "course"];
-  const formatMap = {
-    web: "article",
-    website: "article",
-    tutorial: "article",
-    blog: "article",
-    book: "article",
-    podcast: "video",
-    interactive: "exercise",
-    project: "exercise",
-    quiz: "exercise",
-    mooc: "course",
-    certification: "course",
-  };
-
-  if (parsed.modules) {
-    parsed.modules = parsed.modules.map((mod) => ({
-      ...mod,
-      resources: (mod.resources || []).map((resource) => ({
-        ...resource,
-        format: validFormats.includes(resource.format)
-          ? resource.format
-          : formatMap[resource.format?.toLowerCase()] || "article",
-      })),
-    }));
-  }
-
-  return parsed;
-};
-
 
 module.exports = { generateLearningPathway, replacebrokenResources };
