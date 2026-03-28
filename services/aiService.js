@@ -98,7 +98,23 @@ Generate a focused, practical learning pathway specifically for ${subfieldLabel}
 - Create 4 to 6 modules directly relevant to ${subfieldLabel}.
 - Each module must build on the previous one in difficulty.
 - Calibrate depth to someone with ${skillLevel} level knowledge.
-- For each module include 2 to 3 free resources from freeCodeCamp, Coursera (free audit), edX (free audit), Khan Academy, YouTube, MIT OpenCourseWare, fast.ai, or W3Schools.
+- - For each module include 2 to 3 free resources. Use ONLY these exact base URLs:
+  * https://www.freecodecamp.org/learn/ (for web dev, JS, Python, data science)
+  * https://www.youtube.com/watch?v= (YouTube — always works)
+  * https://www.khanacademy.org/computing/ or https://www.khanacademy.org/math/
+  * https://developer.mozilla.org/en-US/docs/ (for web/JavaScript)
+  * https://www.w3schools.com/ (for HTML, CSS, JS, SQL, Python)
+  * https://docs.python.org/3/tutorial/ (for Python)
+  * https://www.coursera.org/learn/ (specific course slugs)
+  * https://ocw.mit.edu/courses/ (MIT OpenCourseWare)
+  * https://www.codecademy.com/learn/ (free courses)
+  * https://fast.ai (for ML/AI)
+  * https://kaggle.com/learn (for data science/ML)
+  * https://git-scm.com/book/en/v2 (for Git)
+  * https://cs50.harvard.edu/ (for CS fundamentals)
+- IMPORTANT: Use real, specific URLs — not homepage URLs
+- IMPORTANT: YouTube links must be real video URLs with actual video IDs
+- NEVER invent URLs — only use URLs you are certain exist
 - Write a brief overall explanation of why this pathway suits this learner.
 
 RESPOND WITH VALID JSON ONLY. No markdown, no code fences, no text before or after the JSON:
