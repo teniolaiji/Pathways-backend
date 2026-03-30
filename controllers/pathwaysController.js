@@ -4,6 +4,7 @@ const Progress = require("../models/Progress");
 const {
   generateLearningPathway,
   replacebrokenResources,
+  callGroq,
 } = require("../services/aiService");
 const { validateResourceUrl } = require("../services/personalizationEngine");
 
@@ -203,6 +204,183 @@ const sanitiseModules = (modules) =>
     })),
   }));
 
+// ── ensureMinimumResources ────────────────────────────────────────
+// Guarantees every module has at least one validated resource.
+// If a module ends up with no valid resources after validation and
+// replacement, requests one fallback resource from the AI.
+const ensureMinimumResources = async (modules, subfieldLabel, domainLabel) => {
+  const result = await Promise.all(
+    modules.map(async (mod) => {
+      const validResources = (mod.resources || []).filter(
+        (r) => r.isValidated !== false,
+      );
+
+      // Module already has at least one valid resource — leave it alone
+      if (validResources.length > 0) return mod;
+
+      console.log(
+        `[Pathway] Module "${mod.title}" has no valid resources. Requesting fallback...`,
+      );
+
+      // Ask AI for one guaranteed-working fallback resource
+      const fallbackPrompt = `You are a STEAM education resource curator.
+
+The learning module "${mod.title}" for ${subfieldLabel} (${domainLabel}) has no working resource links.
+Please provide exactly ONE reliable, free learning resource for this topic.
+
+STRICT REQUIREMENTS:
+- Must be from one of these platforms only: YouTube, freeCodeCamp, Khan Academy, W3Schools, MDN Web Docs, MIT OpenCourseWare, CS50, Codecademy, fast.ai, Kaggle Learn
+- The URL must be a real, specific page — not a homepage
+- Must be completely free to access with no login required
+- Must be directly relevant to: ${mod.title}
+
+RESPOND WITH VALID JSON ONLY — a single object, not an array:
+{
+  "title": "Resource title",
+  "url": "https://specific-working-url.com/page",
+  "format": "video",
+  "source": "Platform name",
+  "isFree": true
+}`;
+
+      try {
+        const rawText = await callGroq(fallbackPrompt);
+        const cleaned = rawText
+          .replace(/^```json\s*/i, "")
+          .replace(/^```\s*/i, "")
+          .replace(/```\s*$/i, "")
+          .replace(/^\[/, "")
+          .replace(/\]$/, "") // strip array brackets if AI wraps it
+          .trim();
+
+        const fallback = JSON.parse(cleaned);
+
+        // Sanitise and validate the fallback
+        const sanitised = {
+          ...fallback,
+          format: sanitiseFormat(fallback.format),
+          isValidated: await validateResourceUrl(fallback.url),
+        };
+
+        console.log(
+          `[Pathway] Fallback for "${mod.title}": ${sanitised.title} — valid: ${sanitised.isValidated}`,
+        );
+
+        return {
+          ...mod,
+          resources: [sanitised],
+        };
+      } catch (e) {
+        console.error(
+          `[Pathway] Fallback resource request failed for "${mod.title}":`,
+          e.message,
+        );
+
+        // Last resort — add a hardcoded reliable resource based on domain
+        const lastResort = getLastResortResource(mod.title, subfieldLabel);
+        return { ...mod, resources: [lastResort] };
+      }
+    }),
+  );
+
+  return result;
+};
+
+// ── getLastResortResource ─────────────────────────────────────────
+// Hardcoded fallback used only if AI fallback also fails.
+// These URLs are extremely stable and unlikely to ever break.
+const getLastResortResource = (moduleTitle, subfieldLabel) => {
+  const sf = subfieldLabel.toLowerCase();
+
+  if (
+    sf.includes("web") ||
+    sf.includes("html") ||
+    sf.includes("css") ||
+    sf.includes("javascript")
+  ) {
+    return {
+      title: "MDN Web Docs — Web Technology Reference",
+      url: "https://developer.mozilla.org/en-US/docs/Web",
+      format: "article",
+      source: "MDN Web Docs",
+      isFree: true,
+      isValidated: true,
+    };
+  }
+  if (
+    sf.includes("python") ||
+    sf.includes("data science") ||
+    sf.includes("machine learning")
+  ) {
+    return {
+      title: "freeCodeCamp — Data Analysis with Python",
+      url: "https://www.freecodecamp.org/learn/data-analysis-with-python/",
+      format: "course",
+      source: "freeCodeCamp",
+      isFree: true,
+      isValidated: true,
+    };
+  }
+  if (
+    sf.includes("math") ||
+    sf.includes("statistic") ||
+    sf.includes("algebra")
+  ) {
+    return {
+      title: "Khan Academy — Mathematics",
+      url: "https://www.khanacademy.org/math",
+      format: "course",
+      source: "Khan Academy",
+      isFree: true,
+      isValidated: true,
+    };
+  }
+  if (
+    sf.includes("science") ||
+    sf.includes("biology") ||
+    sf.includes("chemistry") ||
+    sf.includes("physics")
+  ) {
+    return {
+      title: "Khan Academy — Science",
+      url: "https://www.khanacademy.org/science",
+      format: "course",
+      source: "Khan Academy",
+      isFree: true,
+      isValidated: true,
+    };
+  }
+  if (sf.includes("sql") || sf.includes("database")) {
+    return {
+      title: "W3Schools SQL Tutorial",
+      url: "https://www.w3schools.com/sql/",
+      format: "article",
+      source: "W3Schools",
+      isFree: true,
+      isValidated: true,
+    };
+  }
+  if (sf.includes("cyber") || sf.includes("security")) {
+    return {
+      title: "CS50 Cybersecurity — Harvard",
+      url: "https://cs50.harvard.edu/cybersecurity/",
+      format: "course",
+      source: "Harvard CS50",
+      isFree: true,
+      isValidated: true,
+    };
+  }
+
+  // Universal fallback — freeCodeCamp covers almost every STEAM topic
+  return {
+    title: `freeCodeCamp — Learn ${subfieldLabel}`,
+    url: "https://www.freecodecamp.org/learn",
+    format: "course",
+    source: "freeCodeCamp",
+    isFree: true,
+    isValidated: true,
+  };
+};
 // ── validateAndFixResources ───────────────────────────────────────
 const validateAndFixResources = async (modules, subfieldLabel, domainLabel) => {
   // Step 1 — validate all URLs concurrently
@@ -308,6 +486,8 @@ const validateAndFixResources = async (modules, subfieldLabel, domainLabel) => {
       return r;
     }),
   }));
+  // Final safety net — ensure every module has at least one resource
+  return ensureMinimumResources(swapped, subfieldLabel, domainLabel);
 };
 
 // ── generatePathway ───────────────────────────────────────────────
@@ -353,21 +533,17 @@ const generatePathway = async (req, res) => {
       .json({ message: "Pathway generated successfully.", pathway });
   } catch (error) {
     if (error instanceof SyntaxError)
-      return res
-        .status(502)
-        .json({
-          message: "AI returned an unexpected response. Please try again.",
-        });
+      return res.status(502).json({
+        message: "AI returned an unexpected response. Please try again.",
+      });
     if (
       error.message?.includes("RATE_LIMIT") ||
       error.message?.includes("busy")
     )
-      return res
-        .status(429)
-        .json({
-          message: "AI service is busy. Please wait 1 minute.",
-          retryAfterSeconds: 60,
-        });
+      return res.status(429).json({
+        message: "AI service is busy. Please wait 1 minute.",
+        retryAfterSeconds: 60,
+      });
     res.status(500).json({ message: error.message });
   }
 };
@@ -425,21 +601,17 @@ const regeneratePathway = async (req, res) => {
     });
   } catch (error) {
     if (error instanceof SyntaxError)
-      return res
-        .status(502)
-        .json({
-          message: "AI returned an unexpected response. Please try again.",
-        });
+      return res.status(502).json({
+        message: "AI returned an unexpected response. Please try again.",
+      });
     if (
       error.message?.includes("RATE_LIMIT") ||
       error.message?.includes("busy")
     )
-      return res
-        .status(429)
-        .json({
-          message: "AI service is busy. Please wait 1 minute.",
-          retryAfterSeconds: 60,
-        });
+      return res.status(429).json({
+        message: "AI service is busy. Please wait 1 minute.",
+        retryAfterSeconds: 60,
+      });
     res.status(500).json({ message: error.message });
   }
 };

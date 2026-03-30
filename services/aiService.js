@@ -217,4 +217,4 @@ RESPOND WITH VALID JSON ONLY, no markdown, no extra text:
   return JSON.parse(cleaned);
 };
 
-module.exports = { generateLearningPathway, replacebrokenResources };
+module.exports = { generateLearningPathway, replacebrokenResources, callGroq };
