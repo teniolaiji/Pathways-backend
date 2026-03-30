@@ -409,9 +409,11 @@ const validateAndFixResources = async (modules, subfieldLabel, domainLabel) => {
     `[Pathway] ${totalResources - broken.length}/${totalResources} resources valid. ${broken.length} broken.`,
   );
 
-  if (broken.length === 0) return withValidation;
+  // No broken resources — still run ensureMinimumResources as safety net
+  if (broken.length === 0) {
+    return ensureMinimumResources(withValidation, subfieldLabel, domainLabel);
+  }
 
-  // Step 3 — ask AI to replace broken resources
   // Step 3 — ask AI to replace broken resources (up to 2 attempts)
   let replacements = [];
   let replaceAttempt = 0;
@@ -458,7 +460,7 @@ const validateAndFixResources = async (modules, subfieldLabel, domainLabel) => {
       }
     } catch (e) {
       console.error("[Pathway] AI replacement failed:", e.message);
-      break;
+      return ensureMinimumResources(withValidation, subfieldLabel, domainLabel);
     }
   }
 
@@ -474,7 +476,7 @@ const validateAndFixResources = async (modules, subfieldLabel, domainLabel) => {
 
   // Step 5 — swap broken with replacements
   let idx = 0;
-  return withValidation.map((mod) => ({
+  const swapped = withValidation.map((mod) => ({
     ...mod,
     resources: mod.resources.map((r) => {
       if (r.isValidated) return r;
@@ -486,6 +488,7 @@ const validateAndFixResources = async (modules, subfieldLabel, domainLabel) => {
       return r;
     }),
   }));
+
   // Final safety net — ensure every module has at least one resource
   return ensureMinimumResources(swapped, subfieldLabel, domainLabel);
 };
